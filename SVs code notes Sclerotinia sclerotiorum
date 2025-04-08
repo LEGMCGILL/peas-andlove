@@ -1,0 +1,256 @@
+Nanopore-assemblies
+This repository contains some instructions to create Assemblies with Nanopore reads.
+
+1. CONVERTING FAST5 TO POD5 FOR BASECALLING WITH DORADO
+Install pod5 on Desktop
+
+Here is the installation procedure for pod5 on Topaz.***
+
+To get pod5, I had to install a local vesion of Python. I downloaded Python 3.11.4 from here https://www.python.org/downloads/source/, and the openssl library version 1.1.1, which is necessary for pip, from here https://ftp.openssl.org/source/openssl-1.1.1w.tar.gz
+These are the commands for installing Python 3.11.4 and openssl 1.1.1 locally on Topaz.***
+mkdir openssl cd openssl mkdir src build cd src wget https://ftp.openssl.org/source/openssl-1.1.1w.tar.gz --no-check-certificate tar xvf openssl-1.1.1w.tar.gz
+
+This are following instructions from here: https://stackoverflow.com/questions/73407527/installing-ssl-package-with-pip-requires-ssl-package-to-be-already-installed
+/config
+--prefix=/Downloads/openssl/build
+--openssldir=/Downloads/openssl/build/etc/ssl
+--libdir=/Downloads/openssl/build/lib
+no-shared
+zlib-dynamic
+
+Installing POD5
+pip install pod5
+
+Then I converted the 1st file FAST5 to POD5 using the following command
+
+pod5 convert fast5 ./input/*.fast5 --output converted.pod5 #Instructions based on https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-convert-fast5
+
+2. Install dorado for basecalling
+These are the commands for installing Dorado.
+
+mkdir -p dorado/src dorado/build cd dorado/src
+
+wget https://cdn.oxfordnanoportal.com/software/analysis/dorado-0.3.2-linux-x64.tar.gz tar xvf dorado-0.3.2-linux-x64.tar.gz cd ../build ln -rs ../src/dorado-0.3.2-linux-x64/*
+
+At the middle of our installation we realized we are not able to use Dorado with the kit we have so had to install Guppy instead.
+
+2.1. Installing Guppy instructions for basecalling.
+Installed Guppy from #https://community.nanoporetech.com/downloads
+
+In command line:
+
+$ tar -xf ont-guppy_6.5.7_linux64.tar.gz
+
+To start the basecalling you can either specify the flowcell and the library kit using the parameters -f FLO-MIN106 and -k SQK-LSK108 or use option –c and the name of the configuration file.
+
+We choose the right settings for our kit: dna_r9.4.1_e8.1 super accurate (SUP) model, for accurate conversion. Options for barcode trimming and read splitting were enabled alongside basecalling.
+
+guppy_basecaller –i -s -c dna_r9.4.1_e8.1_sup.cfg --barcode_kits SQK-NBD112.96 --enable_trim_barcodes --do_read_splitting -x auto
+
+3. Quality Control with Nanoplot v1.42.0 to generate summary statistics (De Coster & Rademakers, 2023) https://github.com/wdecoster/NanoPlot.
+It is recommended to concatenate files first:
+
+$ for dir in barcode*; do cd 
+d
+i
+r
+c
+a
+t
+∗
+f
+a
+s
+t
+q
+>
+{dir}_concatenated.fastq cd ../ done
+
+After concatenate files, the Quality Control can be performed with NanoPlot with the following command:
+
+for barcode in barcode*/*concatenated.fastq: do
+
+  NanoPlot --fastq $barcode \
+  --outdir ${barcode%.*}_nanoplot \
+  --prefix nanoplot \
+  --tsv stats \
+  --info in report \
+  --verbose
+done
+
+4. Assembly generation.
+Clean reads were assembled into contiguous sequences with Flye v2.9.3 producing draft assemblies (Kolmogorov et al., 2019) https://github.com/fenderglass/Flye 
+
+Installing flye:
+
+git clone https://github.com/fenderglass/Flye
+
+Then create the assemblies with the following command, this is an example of an actual sample. 
+flye --nano-hq barcode07/*fastq --out-dir flye_assembly07 --genome-size 40m --threads 15 flye --nano-hq barcode12/*fastq --out-dir flye_assembly12 --genome-size 40m --threads 15
+
+5. Assembly polishing with Medaka
+ Draft assemblies were then self-polished with Medaka v1.11.3 & v1.8.1 (https://github.com/nanoporetech/medaka).  
+Instructions to install Medaka
+
+$ pip install medaka
+
+Here it is a good practice to create a virtual environment to run the polishing.
+
+Command to start assembly polishing:
+
+$ medaka_consensus -i /home/laura/gtube_fragmented/barcode07/barcode07_concatenated.fastq -d /home/laura/flye_assembly07/ assembly.fasta -o /home/laura/barcode07_medaka_out -t 1 -m r941_e81_sup_g514 -b 100
+
+Also can be run with the following loop
+
+$ for dir in basecalling_barcode*/*concatenated.fastq; do
+
+medaka_consensus -i $basecalling_barcode
+-d 
+f
+l
+y
+e
+a
+s
+s
+e
+m
+b
+l
+y
+ 
+−
+o
+{basecalling_barcode%.*}_medaka_output
+-t 8
+-m r941_e81_sup_g514 done
+
+6. Scaffolding and assembly correction.
+Software v.2.26 was used with settings for improving the assemblies and scaffolding (Alonge, 2019; Alonge, 2022) (https://github.com/malonge/RagTag).
+
+I am enclosing all the commands needed to use RagTag:
+
+install with conda
+conda install -c bioconda ragtag
+
+correct a query assembly
+ragtag.py correct ref.fasta query.fasta
+
+scaffold a query assembly
+ragtag.py scaffold ref.fasta query.fasta
+
+scaffold with multiple references/maps
+ragtag.py scaffold -o out_1 ref1.fasta query.fasta ragtag.py scaffold -o out_2 ref2.fasta query.fasta ragtag.py merge query.fasta out_/.agp other.map.agp
+
+use Hi-C to resolve conflicts
+ragtag.py merge -b hic.bam query.fasta out_/.agp other.map.agp
+
+make joins and fill gaps in target.fa using sequences from query.fa
+ragtag.py patch target.fa query.fa
+
+This is an actual example of the two step process that we followed, which consisted in 1) Correction 2) Assembling
+
+I installed RagTag locally and created a v_env the name: my_ragtag_venv and activated with: $ conda activate my_ragtag_env
+
+Ragtag correction:
+$ ragtag.py correct -u -w -T ont -t 14 -o ragtag_07_corrected /myont_practice/Scaffolding_correction/GCA_001857865.1_ASM185786v1_genomic.fna /myont_practice/Scaffolding_correction/07consensus.fasta
+
+https://github.com/malonge/RagTag/wiki/correct
+
+Ragtag scaffolding:
+$ ragtag.py scaffold -u -w -o 07_scaffolded/myont_practice/Scaffolding_correction/GCA_001857865.1_ASM185786v1_genomic.fna /myont_practice/ragtag_07_corrected_withreaads_try/ragtag.correct.fasta
+
+https://github.com/malonge/RagTag/wiki/scaffold
+
+6. BUSCO Analyses.
+Benchmarking universal single-copy orthologs (BUSCO) v.5.5.0 analysis (Manni et al., 2021; Simão, 2015) was performed with the following instructions from https://github.com/metashot/busco cd BUSCO mkdir final_genomes mv *.fasta final_genomes
+
+Note: conda got stuck on 'Solving environment', so I ran using Docker instead.
+docker run -u 
+(
+i
+d
+−
+u
+)
+−
+v
+(pwd):/busco_wd ezlabgva/busco:v5.4.7_cv1 busco -i final_genomes -o final_genomes_busco -l fungi_odb10 -m genome
+
+Here I used two Scripts that I am enclosing
+
+************SCRIPTS USED IN BUSCO Check in Ubuntu in my computer (PENDING).
+
+Search as: busco_ccanada07.sh busco_ccanada12.sh
+
+7. Alignment prior to Variant calling
+For variant calling Sniffles can be used with any aligner, we went ahead using Minimap2 with the following commands to create BAM files.
+
+$ minimap2 -ax map-ont GCA_001857865ref.fa Ss07.fasta > Ss07.aligned.sam
+
+$ samtools view -Sb Ss07.aligned.sam > Ss07.aligned.bam
+
+$ samtools sort Ss07.aligned.bam -o Ss07.aligned.sorted.bam
+
+$ samtools index Ss07.aligned.sorted.bam
+
+*******Here I jus noticed an error consisting in that the alignment was done using fasta files which might have played a role in some issues and inaccuracies with the identification of SVs.
+
+So had to re run this step, see the new code used with FASTQ files this time.
+
+ALIGNMENT PRIOR TO VARIANT CALLING WITH Minimap2 ****RE RUN * *
+
+$ minimap2 -ax map-ont GCA_001857865ref.fa barcode07_concatenated.fastq > Ss07aligned.sam $ samtools view -Sb Ss07aligned.sam > Ss07aligned.bam $ samtools sort Ss07aligned.bam -o Ss07aligned.sorted.bam $ samtools index Ss07aligned.sorted.bam
+
+$ minimap2 -ax map-ont GCA_001857865ref.fa barcode12_concatenated.fastq > Ss12aligned.sam $ samtools view -Sb Ss12aligned.sam > Ss12aligned.bam $ samtools sort Ss12aligned.bam -o Ss12aligned.sorted.bam $ samtools index Ss12aligned.sorted.bam
+
+8. SV calling with Sniffles.
+Installation
+
+$ pip install sniffles
+
+Ran with their specific commands (Described below). I did individual (1), and also with multiple calling (2)
+
+So, when I type $ sniffles in the CL I can see a couple of options.
+
+I used the command displayed in option A (Call SVs for single sample):
+~$ sniffles --input sorted_indexed_alignments.bam --vcf output.vcf (This is the command displayed in Github sniffles page among a couple others)
+
+~$ sniffles --input Ss07.aligned.sorted.bam -v variants.vcf (This is the actual command I used for each of our samples).
+
+I used the command displayed in option B (Multi-sample calling): 
+Two step proces:
+
+Step 1. Create .snf for each sample: sniffles --input sample1.bam --snf sample1.snf
+
+Step 2. Combined calling: sniffles --input sample1.snf sample2.snf ... sampleN.snf --vcf multisample.vcf
+Output from sniffles is a file in .vcf format
+
+At this point I notified Valerio and Marysia of the mistake with using FASTQ files and that I added filters to generate the new vcf files, the following command describe the flag/commands used in Variant calling. The previously used multi-sample calling here was not performed as we are analyzing only two genomes.
+
+$ sniffles --input Ss07aligned.sorted.bam --vcf PSVariants07.vcf --minsupport 10 --minsvlen 50 --qc-stdev-abs-max 500 --qc-coverage 5 --qc-strand True --long-ins-length 500 --long-del-length 10
+
+$ sniffles --input Ss12aligned.sorted.bam --vcf PSVariants12.vcf --minsupport 10 --minsvlen 50 --qc-stdev-abs-max 500 --qc-coverage 5 --qc-strand True --long-ins-length 500 --long-del-length 10
+
+Now I have new vcf files that were created with some filters and adequately priorly aligned with Minimap2 using fastq files now.
+
+Custom Filters for Sniffles SV calling - The filters were intended to improve confidence and biological relevance of SVs in our fungal genomes
+
+--min_support (5-10) I chose 10 meaning it requires 10 reads to support a variant for it to be reported. This is suggested to help reduce false positives from sequencing noise while retaining variants in lower coverage regions. (Some limitations though, while it reduces the false positives might miss low-frequency or heterozygous SVs in lower coverage regions. --min_length (50 bp) removes very small insertions/deletions that may be SNP/indel-level artifacts; focuses on true SVs. --qc-stdev-abs-max 500 Filters out SVs with excesive read variation (based on standard deviation of the SV region); limits noise from low-complexity/repetitive regions. --qc-coverage 5 Minimum average coverage for a variant to be called. Helps avoid false positives in poorly covered regions. --qc-strand True Requires strand bias check to ensure SVs are supported both forward and reverse reads- improves confidence. --long-ins-length 500 treshold for long insertions; variants longer that this are processed difrerently --long-del-length 10 Defines threshold for long deletions (low value means capturing most deletions as long variants)
+
+This is so far:
+
+However, I feel tempted to try --min_support 5 for comparison as maybe 10 is too strict and lead to missed variants especially for the genome coverage that we have in our samples. I also recently read about the usefulness of using the --genotype flag, which would let Sniffles try to determine zygosity (Would it be useful)????
+
+Chat about this in a meeting (Note made on April 08 2025).
+
+8. Variant effect predictor.
+.vcf files were uploaded to the following cite where effects of SVs found were determined. https://useast.ensembl.org/info/docs/tools/vep/index.html.
+
+Steps Biomart --> Specie --> Filter --> Add gene names --> Variant Effector predictor --> Comparative genome viewer NCBI (Coding? non-coding).
+
+9. Geneious visualization.
+(https://www.geneious.com) Geneious was used as a software to explore both the genomes and in comparison to the reference genome, corroborating the results provided by VEP. Annotations from GenBank under Bioproject number PRJNA348385 were downloaded to enable the comparison of the VCF file containing the SVs of both genomes. Individual inspection of each SV was performed with Geneious software.
+
+10. Protein domain cross-referenced
+Interpro (https://www.uniprot.org/help/uniparc) was used to obtain information about the functional domains of genes in proximity to the SVs identified.
